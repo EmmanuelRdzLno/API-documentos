@@ -29,7 +29,7 @@ const swaggerOptions = {
       version: "1.0.0",
       description: "Procesa PDF o imágenes en base64, extrae texto y genera JSON con GPT",
     },
-    servers: [{ url: "http://localhost:3030" }],
+    servers: [{ url: "http://localhost:8080" }],
   },
   apis: [__filename],
 };
@@ -223,5 +223,5 @@ app.post('/process-file', async (req, res) => {
 
 
 // Servidor
-const PORT = process.env.PORT || 3030;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Servidor corriendo en http://localhost:${PORT}/api-docs`));
