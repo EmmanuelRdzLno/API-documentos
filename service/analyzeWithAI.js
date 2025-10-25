@@ -2,6 +2,8 @@
 const OpenAI = require("openai");
 const sharp = require("sharp");
 
+require('dotenv').config();
+
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });

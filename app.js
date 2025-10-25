@@ -19,5 +19,6 @@ app.use('/generate-pdf', generatePDFRoute);
 app.use('/api-docs', swaggerRoutes);
 
 // Servidor
-const PORT = process.env.PORT || 3030;
-app.listen(PORT, () => console.log(`🚀 Servidor corriendo en http://localhost:${PORT}/api-docs`));
+const WEB_PORT = process.env.WEB_PORT;
+const WEB_HOST = process.env.WEB_HOST;
+app.listen(WEB_PORT, () => console.log(`🚀 Servidor corriendo en ${WEB_HOST}/api-docs`));

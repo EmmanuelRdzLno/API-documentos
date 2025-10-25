@@ -4,6 +4,9 @@ const router = express.Router();
 const swaggerJsDoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 
+require('dotenv').config();
+
+const WEB_HOST = process.env.WEB_HOST;
 const swaggerOptions = {
   definition: {
     openapi: "3.0.0",
@@ -13,7 +16,7 @@ const swaggerOptions = {
       description: "Procesa PDFs o imágenes en base64, extrae texto y genera JSON con GPT",
     },
     servers: [
-      { url: "http://localhost:3030" },
+      { url: WEB_HOST },
     ],
   },
   apis: [
