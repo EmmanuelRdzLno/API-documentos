@@ -1,32 +1,39 @@
-// routes/processFile.js
 const express = require("express");
 const router = express.Router();
 const path = require("path");
 const fs = require("fs");
-const { Buffer } = require("buffer");
-const { analyzeImage, ensureImageDataUrl } = require("../service/analyzeWithAI");
+const pdfParse = require("pdf-parse");
 
-// Dir de guardado para pruebas/depuración
+const {
+  normalizeBase64,
+  getMimeFromDataUrl,
+  detectMimeFromBuffer,
+  analyzeImage,
+  analyzePdfText,
+} = require("../service/analyzeWithAI");
+
+// Dir para depuración
 const UPLOADS_DIR = path.join(__dirname, "..", "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-// Guarda un archivo en disco (opcional, útil para depurar)
+function safeFilename(name) {
+  const base = (name || `upload_${Date.now()}`).toString();
+  return base.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
 function saveBuffer(buffer, filename) {
-  const safe = filename || `upload_${Date.now()}`;
+  const safe = safeFilename(filename);
   const filePath = path.join(UPLOADS_DIR, safe);
   fs.writeFileSync(filePath, buffer);
   return filePath;
 }
 
 function deleteFile(filePath) {
-  if (!filePath) return;
-  fs.unlink(filePath, (err) => {
-    if (err) {
-      console.warn("⚠️ No se pudo eliminar el archivo:", filePath, err.message);
-    } else {
-      console.log("🗑 Archivo eliminado:", filePath);
-    }
-  });
+  try {
+    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (e) {
+    console.warn("⚠️ No pude borrar archivo temporal:", e.message);
+  }
 }
 
 /**
@@ -34,154 +41,134 @@ function deleteFile(filePath) {
  * /process-file:
  *   post:
  *     tags:
- *       - OCR / Análisis de Archivos (imagen o PDF)
- *     summary: Procesa una imagen (JPG/PNG/WEBP/GIF) o un PDF en base64 y devuelve análisis/metadata
- *     description: >
- *       Envía un JSON con **base64** del archivo e **indica si es PDF o imagen**.  
- *       - Si es **PDF**: procesa el PDF (puedes hacer OCR + resumen si lo implementas).  
- *       - Si es **imagen**: valida y normaliza la imagen y llama a OpenAI para un breve resumen.
- *
+ *       - Documentos
+ *     summary: Procesa archivo (PDF o imagen) en base64 y devuelve JSON estructurado
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required: [base64]
+ *             required:
+ *               - base64
  *             properties:
  *               base64:
  *                 type: string
- *                 description: Archivo en base64 (puede venir con o sin prefijo dataURL)
+ *                 description: "base64 del archivo (puede ser limpio o dataURL)"
  *               filename:
  *                 type: string
- *                 description: Nombre sugerido de archivo (opcional)
+ *                 description: "Nombre del archivo (opcional)"
  *               mimeType:
  *                 type: string
- *                 description: Mime esperado (opcional)
- *               kind:
- *                 type: string
- *                 enum: [image, pdf]
- *                 description: Fuerza el tipo si lo conoces; si no, se intenta deducir
- *           example:
- *             # Imagen (con dataURL)
- *             base64: "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD..."
- *             filename: "ticket.jpg"
- *             mimeType: "image/jpeg"
- *             kind: "image"
+ *                 description: "Opcional pero recomendado. Ejemplos: application/pdf, image/png"
  *     responses:
  *       200:
- *         description: Resultado del análisis
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 ok:
- *                   type: boolean
- *                 kind:
- *                   type: string
- *                   description: Tipo detectado (image/pdf)
- *                 savedFile:
- *                   type: string
- *                   description: Ruta local guardada (para depurar)
- *                 summary:
- *                   type: string
- *                   description: Resumen/Texto de salida (en caso de imagen)
- *                 details:
- *                   type: object
- *                   description: Campo libre para anexar datos adicionales
- *       400:
- *         description: Datos inválidos
- *       500:
- *         description: Error interno
+ *         description: Resultado
  */
 router.post("/", async (req, res) => {
-  let savedPath = null; // <-- Para eliminar siempre
+  let savedPath = null;
 
   try {
-    const { base64, filename, mimeType, kind } = req.body || {};
-    if (!base64 || typeof base64 !== "string") {
-      return res.status(400).json({ ok: false, error: "Se requiere 'base64' en el body." });
+    const { base64, filename, mimeType } = req.body || {};
+    if (!base64) return res.status(400).json({ ok: false, error: "No se recibió base64" });
+
+    // 1) Normalizar base64 (quita dataURL y whitespaces)
+    const cleanB64 = normalizeBase64(base64);
+    if (!cleanB64) return res.status(400).json({ ok: false, error: "base64 vacío" });
+
+    // 2) Decode buffer
+    let buf;
+    try {
+      buf = Buffer.from(cleanB64, "base64");
+    } catch (e) {
+      return res.status(400).json({ ok: false, error: "base64 inválido (no se pudo decodificar)" });
     }
 
-    // Normalizamos base64 y armamos buffer
-    let clean = base64;
-    const m = String(base64).match(/^data:([^;]+);base64,(.*)$/i);
-    let hintedMime = mimeType;
-    if (m) {
-      hintedMime = hintedMime || m[1];
-      clean = m[2];
+    if (!buf || buf.length < 10) {
+      return res.status(400).json({ ok: false, error: "Archivo decodificado vacío o corrupto" });
     }
-    const buf = Buffer.from(clean.replace(/\s+/g, ""), "base64");
 
-    // Heurística PDF
-    const isPdf =
-      (kind === "pdf") ||
-      (hintedMime && /^application\/pdf$/i.test(hintedMime)) ||
-      filename?.toLowerCase().endsWith(".pdf");
+    // 3) Detectar MIME robusto:
+    //    prioridad: mimeType body > dataURL > magic bytes
+    const hinted = (mimeType || "").toLowerCase().trim();
+    const fromDataUrl = getMimeFromDataUrl(base64);
+    const fromMagic = detectMimeFromBuffer(buf);
 
-    // Guardamos archivo
-    const safeName =
-      filename ||
-      (isPdf ? `archivo_${Date.now()}.pdf` : `imagen_${Date.now()}.bin`);
+    // Permitir variantes como "application/pdf; charset=binary"
+    let finalMime = hinted || fromDataUrl || fromMagic;
+    if (finalMime.includes(";")) finalMime = finalMime.split(";")[0].trim();
 
-    savedPath = saveBuffer(buf, safeName);
+    const isPdf = finalMime === "application/pdf";
+    const isImage = finalMime.startsWith("image/");
 
-    // ---------- PDF ----------
+    const finalName = safeFilename(filename || (isPdf ? `document_${Date.now()}.pdf` : `image_${Date.now()}.png`));
+
+    // Guardar temporal para debug (opcional)
+    savedPath = saveBuffer(buf, finalName);
+
+    // 4) Procesamiento
     if (isPdf) {
+      // PDF -> extraer texto y mandar a IA
+      const parsed = await pdfParse(buf);
+      const text = (parsed.text || "").trim();
+
+      if (!text) {
+        const response = {
+          ok: false,
+          mimeType: finalMime,
+          filename: finalName,
+          error: "PDF sin texto detectable (probablemente escaneado). Implementa OCR/vision por páginas si lo necesitas.",
+        };
+        deleteFile(savedPath);
+        return res.status(200).json(response);
+      }
+
+      const ai = await analyzePdfText(text, finalName);
+
       const response = {
-        ok: true,
-        kind: "pdf",
-        savedFile: savedPath,
-        details: {
-          filename: path.basename(savedPath),
-          size_bytes: buf.length,
-          note:
-            "PDF recibido y guardado. Implementa aquí tu OCR o parser específico si lo requieres."
-        }
+        ok: ai.ok,
+        mimeType: finalMime,
+        filename: finalName,
+        structuredJSON: ai.structured || null,
+        summary: ai.summary || null,
+        pages: parsed.numpages || null,
+        textPreview: text.slice(0, 800),
       };
 
-      // Enviar respuesta → después borrar archivo
-      res.json(response);
       deleteFile(savedPath);
-      return;
+      return res.json(response);
     }
 
-    // ---------- IMAGEN ----------
-    let ensured;
-    try {
-      ensured = await ensureImageDataUrl(base64, hintedMime);
-    } catch (e) {
-      console.error("❌ Validación de imagen:", e?.message || e);
-      res.status(400).json({ ok: false, error: e?.message || "Imagen inválida." });
+    if (isImage) {
+      // Imagen -> IA vision
+      const ai = await analyzeImage(cleanB64, finalMime);
+
+      const response = {
+        ok: ai.ok,
+        mimeType: finalMime,
+        filename: finalName,
+        structuredJSON: ai.structured || null,
+        summary: ai.summary || null,
+      };
+
       deleteFile(savedPath);
-      return;
+      return res.json(response);
     }
 
-    const ai = await analyzeImage(ensured.dataUrl, ensured.mime);
-    if (!ai.ok) {
-      res.status(400).json({ ok: false, error: ai.error });
-      deleteFile(savedPath);
-      return;
-    }
-
+    // Tipo no soportado
     const response = {
-      ok: true,
-      kind: "image",
-      savedFile: savedPath,
-      summary: ai.summary,
-      details: { mime: ensured.mime, filename: path.basename(savedPath) }
+      ok: false,
+      mimeType: finalMime,
+      filename: finalName,
+      error: `Tipo de archivo no soportado: ${finalMime}`,
     };
 
-    res.json(response);
     deleteFile(savedPath);
-
+    return res.status(200).json(response);
   } catch (err) {
     console.error("❌ Error procesando archivo:", err);
-    res.status(500).json({ ok: false, error: "Error interno al procesar archivo" });
-
-    // Intenta borrar incluso en errores
     if (savedPath) deleteFile(savedPath);
+    return res.status(500).json({ ok: false, error: err.message || "Error interno al procesar archivo" });
   }
 });
 
