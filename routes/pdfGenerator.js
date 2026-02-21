@@ -131,7 +131,7 @@ router.post("/", async (req, res) => {
   try {
     const data = req.body || {};
 
-    const emisor = data.Emisor || {};
+    const emisor = data.Issuer || {};
     const receptor = data.Receiver || {};
     const items = Array.isArray(data.Items) ? data.Items : [];
 
