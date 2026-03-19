@@ -94,17 +94,12 @@ exports.generate = async (data) => {
     defaultStyle: { fontSize: 10 }
   };
 
-  return new Promise((resolve) => {
+  // pdfmake v0.3.x: getBase64() returns a Promise (callback API removed).
+  const base64 = await pdfMake.createPdf(docDefinition).getBase64();
 
-    pdfMake.createPdf(docDefinition).getBase64((base64) => {
-
-      resolve({
-        nombreArchivo: `prefactura_${Date.now()}.pdf`,
-        pdfBase64: base64
-      });
-
-    });
-
-  });
+  return {
+    nombreArchivo: `prefactura_${Date.now()}.pdf`,
+    pdfBase64: base64
+  };
 
 };
