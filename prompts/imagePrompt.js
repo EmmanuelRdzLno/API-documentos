@@ -58,3 +58,40 @@ No debe usar markdown. Si el riesgo es bajo, no debe agregar texto fuera del JSO
 Debe priorizar precisión extrema sobre velocidad. Actúa como auditor contable forense especializado en documentos comerciales manuscritos.
 `;
 };
+
+module.exports.getFiscalDataPrompt = function getFiscalDataPrompt() {
+  return `Extrae los datos fiscales del receptor que aparecen en esta imagen.
+
+La imagen puede ser: tarjeta de datos fiscales, ficha de identificación fiscal,
+constancia de situación fiscal SAT, o cualquier documento que contenga
+datos del receptor de una factura.
+
+Devuelve SOLO este JSON, sin markdown ni texto adicional:
+{
+  "tipo_documento": "datos_fiscales_receptor",
+  "receiver": {
+    "rfc": null,
+    "name": null,
+    "tax_zip_code": null,
+    "address": null,
+    "email": null,
+    "phone": null,
+    "city": null,
+    "state": null,
+    "cfdi_use": null
+  }
+}
+
+Reglas:
+- rfc: RFC completo tal como aparece en la imagen (ej. PEAS810809V43).
+- name: nombre completo o razón social del receptor.
+- tax_zip_code: código postal fiscal de 5 dígitos.
+- address: dirección completa como aparece.
+- email: correo electrónico si aparece, o null.
+- phone: teléfono si aparece, o null.
+- city: ciudad o municipio si aparece, o null.
+- state: estado si aparece, o null.
+- cfdi_use: uso de CFDI si aparece (ej. "G03", "GASTOS EN GENERAL"), o null.
+- Si un campo no está visible en la imagen, usar null. No inventes valores.
+`;
+};
